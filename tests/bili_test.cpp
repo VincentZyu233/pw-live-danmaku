@@ -353,19 +353,39 @@ void testParseDanmakuBracketedEmoteToken() {
 }
 
 // The two card kinds follow the documented field tables but have not been observed on this
-// machine, so these tests pin the mapping rather than a capture.
+// machine, so these tests pin the mapping rather than a capture. For the SC that mapping is
+// data.user_info (uname / face / guard_level) with data.medal_info possibly null: reading a name
+// off the top level of data is the mistake these checks exist to catch, since it leaves the card
+// with no name line at all.
 void testParsePaidCard() {
-  const std::string body = R"J({"cmd":"SUPER_CHAT_MESSAGE","data":{"uname":"五条悟","face":"https://f/x.jpg","message":"已经没有什么可怕的了","price":30,"start_time":1791046553,"medal_info":{"guard_level":3}}})J";
+  const std::string body =
+      R"J({"cmd":"SUPER_CHAT_MESSAGE","data":{"medal_info":null,"message":"已经没有什么可怕的了")J"
+      R"J(,"price":30,"start_time":1791046553,"user_info":{"face":"http://i1.hdslb.com/bfs/face/x.jpg")J"
+      R"J(,"guard_level":3,"uname":"五条悟"}}})J";
   Message m;
   check(Bili::parseMessage(Json::parse(body), m), "SUPER_CHAT_MESSAGE: recognised");
   checkEqInt(static_cast<int>(m.kind), static_cast<int>(MsgKind::Paid), "SC: kind is Paid");
-  checkEq(m.user, "五条悟", "SC: user");
+  checkEq(m.user, "五条悟", "SC: user comes from data.user_info.uname");
+  checkEq(m.avatarUrl, "https://i1.hdslb.com/bfs/face/x.jpg",
+          "SC: face comes from data.user_info.face, and an http URL is upgraded like the others");
   checkEq(m.plainText(), "已经没有什么可怕的了", "SC: message");
   checkEq(m.amount, "CN¥30", "SC: price");
   // The pinned layer times a notice's dwell from the number, not from the string it is shown as, so
   // the price has to arrive in both forms.
   checkEqInt(m.amountValue, 30, "SC: price also carried as a number, for the dwell");
   checkEqInt(m.tsMs, 1791046553000LL, "SC: start_time is seconds, converted to ms");
+  checkEqInt(static_cast<int>(m.type), static_cast<int>(UserType::Member),
+             "SC: user_info.guard_level 3 is a guard, medal_info being null notwithstanding");
+
+  // A payload that does not match the table is thinner, not dropped: the price and the body are
+  // still worth drawing even with no sender block on it.
+  Message bare;
+  check(Bili::parseMessage(
+            Json::parse(R"J({"cmd":"SUPER_CHAT_MESSAGE","data":{"message":"x","price":30}})J"),
+            bare),
+        "SUPER_CHAT_MESSAGE: a payload without user_info is still recognised");
+  check(bare.user.empty() && bare.plainText() == "x",
+        "SC: and keeps what it did carry rather than dropping the card");
 }
 
 void testPinnedDwellTable() {

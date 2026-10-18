@@ -792,8 +792,15 @@ bool Bili::parseMessage(const Json& json, Message& out) {
   if (cmd == "SUPER_CHAT_MESSAGE") {
     const Json& d = json["data"];
     out.kind = MsgKind::Paid;
-    out.user = d["uname"].str();
-    out.avatarUrl = d["face"].str();
+    // The sender sits under data.user_info, not at the top level of data: user_info.uname is the
+    // nickname, user_info.face the avatar, and user_info.guard_level the 大航海 tier (1 总督,
+    // 2 提督, 3 舰长). The documented table has no data.uname / data.face at all, so reading those
+    // keys left both empty and the card was drawn with no name line on it -- the one line that says
+    // who paid. user_info is present in every documented sample; a payload without it still yields
+    // a card with the price and the body rather than being dropped.
+    const Json& user = d["user_info"];
+    out.user = user["uname"].str();
+    out.avatarUrl = httpsUrl(user["face"].str());
     out.tsMs = static_cast<int64_t>(d["start_time"].num() * 1000);
     const int64_t price = d["price"].num();
     if (price > 0) {
@@ -802,7 +809,11 @@ bool Bili::parseMessage(const Json& json, Message& out) {
       out.amountValue = price;
     }
     splitFragments(d["message"].str(), kNoEmotes, out.parts);
-    if (d["medal_info"]["guard_level"].num() >= 3) out.type = UserType::Member;
+    // medal_info is null when the sender wears no fan medal, hence the second read: either field
+    // marks them a guard, which is how the danmaku path reads its equivalent pair.
+    const int64_t guard = user["guard_level"].num();
+    const int64_t medalGuard = d["medal_info"]["guard_level"].num();
+    if (guard >= 3 || medalGuard >= 3) out.type = UserType::Member;
     return true;
   }
 

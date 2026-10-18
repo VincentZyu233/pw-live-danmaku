@@ -446,8 +446,10 @@ for (int i = 0; i < pango_layout_get_line_count(bl); ++i) {
 
 | cmd | 取用字段 | 渲染 |
 | --- | --- | --- |
-| `SUPER_CHAT_MESSAGE` | `data.uname` / `face` / `message` / `price` / `start_time` | 醒目留言（置顶图层，青色） |
+| `SUPER_CHAT_MESSAGE` | `data.user_info.uname` / `user_info.face` / `message` / `price` / `start_time`；`user_info.guard_level` 与 `medal_info.guard_level`（1 总督 / 2 提督 / 3 舰长，后一个可为 `null`） | 醒目留言（置顶图层，青色） |
 | `GUARD_BUY` | `data.username` / `guard_level` / `price`（金瓜子，1000 = 1 元） | 上舰卡（实心绿） |
+
+SC 的发送者在 `data.user_info` 里，**不在 `data` 顶层**：文档表里根本没有 `data.uname` / `data.face`，按顶层读会得到空串，卡片就少掉“谁付的钱”那一行（只剩金额和正文）。头像 URL 与其他分支一样过 `httpsUrl()`（样本里 `user_info.face` 常是 `http://`）。
 
 **这两条尚未在本机抓到真实样本**（本机常开的房间太安静，入场/礼物/点赞那些热闹房间没有醒目留言），所以解析器里每个字段都是可选的：字段对不上时得到一条内容更少的消息，而不是把消息丢掉。面板侧的两种卡片样式则已经按参考 CSS 实现在 `--demo` 里（并有单测钉住字段映射）。
 
