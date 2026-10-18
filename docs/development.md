@@ -163,6 +163,7 @@ make test
 | `tests/history_test.cpp` | 文件往返、窗口、节流，以及必须被拒绝的文件 |
 | `tests/json_test.cpp` | 只读 JSON 解析器 |
 | `tests/broadcast_test.cpp` | 弹幕线格式（含 RTF 转义）、RFC 6455 的示例握手向量、帧收发、ping/pong，以及两种拒连（未 mask 的帧、非 WebSocket 请求） |
+| `tests/ws_test.cpp` | 客户端的成帧与消息层：分片重组（分片之间还插一个 ping）、二进制帧、close 回显、客户端帧的 mask 位；用一个自签证书的脚本 TLS 服务端驱动真实的 connect/握手/读路径 |
 
 端到端那一步是 `make verify`：挂一个消费者，把帧落盘，用文件大小反推尺寸（BGRA，逐帧
 `width*height*4` 字节）。需要 `gst-launch-1.0` 与 `pipewiresrc`；没有它们就跑不了，此时渲染侧的性能

@@ -66,7 +66,8 @@ class WsClient {
     Text,
     /** A complete binary message arrived; payload is in out. */
     Binary,
-    /** The peer sent a close frame. out holds the two-byte status code (may be empty). */
+    /** The peer sent a close frame. out holds the two-byte status code followed by the reason
+     *  text when the peer carried one, and is empty only when the frame had no payload at all. */
     Close,
     /** Nothing arrived within the timeout. Not an error: the caller uses this to run timers. */
     Timeout,

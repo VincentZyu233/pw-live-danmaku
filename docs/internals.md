@@ -300,6 +300,8 @@ libcurl 8.x 其实带 WebSocket 支持（`curl_ws_recv` / `curl_ws_send` 符号�
 - 子模块的 `HttpClient` 是阻塞 GET 且不暴露 `CONNECT_ONLY`，用它就得为一个站点去改子模块。
 - 剩下要自己写的只有 RFC 6455 的成帧，约 250 行，而 TLS 层的 OpenSSL 本来就要。握手所需的 SHA-1 与 base64 也出自 OpenSSL，没有引入任何新依赖。
 
+成帧与消息层（分片重组、ping 自动回 pong、close 回显、mask 位）由 `tests/ws_test.cpp` 钉住：它自己生成一张自签证书、自己扮服务端，按用例顺序写出确切的帧，跑的是客户端真实的 connect / 握手 / 读路径。直播流里 B 站不发分片帧，所以“一条消息拆在多个帧里”只有脚本服务端能触发——分片重组曾把消息清空后再换出，每条分片消息都变成空串，而这个 bug 因此活过了所有实机运行。
+
 ## 本机 WebSocket 弹幕源（`--ws`）
 
 `--ws` 把面板已经画出来的行再发一份到 `127.0.0.1`，一条消息一个 text 帧，字段用 Tab 分隔：

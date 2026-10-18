@@ -59,8 +59,8 @@ build/pwvideo/%.o: $(PWNODE_DIR)/%.cpp
 # picture. Not part of `all`, because they are a development aid rather than a runtime requirement.
 # -Isrc because the tests live outside src/ and include its headers by name.
 TESTFLAGS := $(CXXFLAGS) -Isrc
-test: build/tests/json build/tests/history build/tests/bili build/tests/broadcast
-	@build/tests/json && build/tests/history && build/tests/bili && build/tests/broadcast
+test: build/tests/json build/tests/history build/tests/bili build/tests/broadcast build/tests/ws
+	@build/tests/json && build/tests/history && build/tests/bili && build/tests/broadcast && build/tests/ws
 
 build/tests/json: src/json.cpp tests/json_test.cpp
 	@mkdir -p build/tests
@@ -91,6 +91,14 @@ build/tests/broadcast: src/broadcast.cpp src/message.cpp src/ws.cpp tests/broadc
 	@mkdir -p build/tests
 	$(CXX) $(TESTFLAGS) -o $@ src/broadcast.cpp src/message.cpp src/ws.cpp \
 	    tests/broadcast_test.cpp $(LDLIBS)
+
+# ws.cpp is the transport half of the bilibili client, and the only way to make it see the frames a
+# case needs is to be the server. The test is one itself: a scripted TLS one whose certificate is
+# generated per run, so what runs is the client's real connect, handshake and read path. No other
+# .cpp is linked in -- this suite is about the message layer, not about what consumes it.
+build/tests/ws: src/ws.cpp tests/ws_test.cpp
+	@mkdir -p build/tests
+	$(CXX) $(TESTFLAGS) -o $@ src/ws.cpp tests/ws_test.cpp $(LDLIBS)
 
 # Verify the video node end to end without OBS: attach as a consumer, land the frames on disk. The
 # file is exactly width*height*4 bytes per frame in BGRA.

@@ -473,6 +473,14 @@ bool WsClient::readFrame(uint8_t& opcode, bool& fin, std::string& payload, int t
     fail("incoming frame exceeds the size cap");
     return false;
   }
+  // A control frame may not be fragmented and may not carry more than 125 bytes (section 5.5).
+  // The close path echoes the peer's payload, so an oversized close let through here would go back
+  // out as an oversized frame -- a violation on the way in and another on the way out. The server
+  // half of this protocol refuses these, and this is the same rule on this side.
+  if ((opcode & 0x08) && (!fin || len > 125)) {
+    fail("invalid control frame");
+    return false;
+  }
 
   // A server never masks, per RFC 6455 section 5.1. Refusing rather than ignoring keeps a
   // protocol error from being silently misread as data.
@@ -526,9 +534,13 @@ WsClient::Event WsClient::next(std::string& out, int timeoutMs) {
         }
         if (!fin) continue;
         opcode = fragmentOpcode_;
-        fragment_.clear();
         fragmentOpcode_ = 0;
+        // The swap has to come before fragment_ is cleared: clearing first throws the assembled
+        // message away and leaves an empty payload here, so every fragmented message used to
+        // arrive as an empty one. The swap leaves the frame's own chunk in fragment_, which is
+        // what the clear then removes.
         payload.swap(fragment_);
+        fragment_.clear();
         break;
       case kOpText:
       case kOpBinary:
