@@ -59,8 +59,8 @@ build/pwvideo/%.o: $(PWNODE_DIR)/%.cpp
 # picture. Not part of `all`, because they are a development aid rather than a runtime requirement.
 # -Isrc because the tests live outside src/ and include its headers by name.
 TESTFLAGS := $(CXXFLAGS) -Isrc
-test: build/tests/json build/tests/history build/tests/bili
-	@build/tests/json && build/tests/history && build/tests/bili
+test: build/tests/json build/tests/history build/tests/bili build/tests/broadcast
+	@build/tests/json && build/tests/history && build/tests/bili && build/tests/broadcast
 
 build/tests/json: src/json.cpp tests/json_test.cpp
 	@mkdir -p build/tests
@@ -82,6 +82,15 @@ build/tests/bili: src/bili.cpp src/json.cpp src/ws.cpp src/message.cpp src/notic
 	$(CXX) $(TESTFLAGS) -o $@ src/bili.cpp src/json.cpp src/ws.cpp src/message.cpp src/notice.cpp \
 	    src/pb.cpp tests/bili_test.cpp $(PWNODE_DIR)/extras/http.cpp \
 	    $(PWNODE_DIR)/extras/text.cpp $(PWNODE_DIR)/extras/cairo_util.cpp $(LDLIBS)
+
+# broadcast.cpp is the outbound feed. message.cpp is in for plainText(), and ws.cpp for the
+# handshake Accept hash the server borrows from the client. This suite is the only one that opens a
+# socket -- an ephemeral loopback port -- which is also why the send/recv deadlines in it are
+# generous: it has to survive a loaded machine without becoming slow on an idle one.
+build/tests/broadcast: src/broadcast.cpp src/message.cpp src/ws.cpp tests/broadcast_test.cpp
+	@mkdir -p build/tests
+	$(CXX) $(TESTFLAGS) -o $@ src/broadcast.cpp src/message.cpp src/ws.cpp \
+	    tests/broadcast_test.cpp $(LDLIBS)
 
 # Verify the video node end to end without OBS: attach as a consumer, land the frames on disk. The
 # file is exactly width*height*4 bytes per frame in BGRA.

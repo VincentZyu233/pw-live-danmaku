@@ -10,6 +10,7 @@
 // static layer into the frame.
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -26,6 +27,7 @@
 
 #include "images.hpp"
 #include "bili.hpp"
+#include "broadcast.hpp"
 #include "cairo_util.hpp"
 #include "demo_faces.hpp"
 #include "history.hpp"
@@ -56,6 +58,16 @@ std::string expandTilde(const std::string& path) {
   const char* home = std::getenv("HOME");
   if (!home || !*home) return path;  // Nothing to expand against; let the open fail on its own terms
   return std::string(home) + path.substr(1);
+}
+
+/** Whether a whole string is decimal digits. Used for --ws's optional port: only a digits-only
+ *  next argument is consumed as a value, so `--ws --room 545068` cannot swallow the room number
+ *  and `--ws -1` is a port the flag never meant to accept. */
+bool allDigits(const char* s) {
+  if (!s || !*s) return false;
+  for (const char* p = s; *p; ++p)
+    if (!std::isdigit(static_cast<unsigned char>(*p))) return false;
+  return true;
 }
 
 /** Font chain. The comma form is a pango fallback chain resolved per character, so latin glyphs
@@ -138,6 +150,17 @@ void usage(std::FILE* out) {
       "                     is missing or unreadable simply starts the overlay with no history\n"
       "  --history-label TEXT  Text on the rule between restored and live rows, default 上次.\n"
       "                     Empty draws the rule alone\n"
+      "  --ws [PORT]        Serve the same messages on a local WebSocket, so a second program can\n"
+      "                     read the chat without watching the picture. One text frame per\n"
+      "                     message, three tab-separated fields: avatar URL, name, body. The port\n"
+      "                     is optional and defaults to 8765. The socket is bound to 127.0.0.1\n"
+      "                     and has no TLS and no authentication: it is a pipe for a consumer on\n"
+      "                     this machine, and must not be exposed past it\n"
+      "  --ws-rtf           Wrap the name and body fields in Resonite rich-text tags (the wiki's\n"
+      "                     Text_formatting list) instead of leaving them plain: the role colour on\n"
+      "                     the name, the gift accent on a gift's verb and name, dimming on entry\n"
+      "                     and like rows, and <noparse> around whatever the viewer typed so chat\n"
+      "                     text cannot inject tags. Requires --ws\n"
       "  --seconds N        Exit after N seconds (0 = never)\n"
       "  --demo             Draw a fixed set of messages and no network at all, for tuning the\n"
       "                     layout without a live room. Overrides --room.\n"
@@ -175,6 +198,11 @@ struct Options {
   // restating it here: the two would otherwise drift apart the first time one of them is edited.
   double fontSize = 0.0, cardFontSize = 0.0;
   bool verbose = false, demo = false;
+  // 0 means "off", the same convention --history uses. --ws alone leaves the port at its default;
+  // --ws-rtf only changes what the feed carries, so it is an error without --ws rather than a flag
+  // that quietly does nothing.
+  int wsPort = 0;
+  bool wsRtf = false;
 };
 
 Args parseArgs(int argc, char** argv, Options& o) {
@@ -232,6 +260,15 @@ Args parseArgs(int argc, char** argv, Options& o) {
       o.historyFile = next(i);
     } else if (a == "--history-label") {
       o.historyLabel = next(i);
+    } else if (a == "--ws") {
+      // An optional value: `--ws` takes the default port, `--ws 9000` the given one. Only a
+      // digits-only next argument is consumed, so the value stays optional without a flag that
+      // follows being mistaken for one.
+      o.wsPort = kDefaultWsPort;
+      if (i + 1 < argc && allDigits(argv[i + 1]))
+        o.wsPort = std::clamp(std::stoi(argv[++i]), 1, 65535);
+    } else if (a == "--ws-rtf") {
+      o.wsRtf = true;
     } else if (a == "--seconds") {
       o.seconds = std::max(0, std::stoi(next(i)));
     } else if (a == "--demo") {
@@ -331,7 +368,7 @@ const char* kindTag(MsgKind k) {
 void siteLoop(Shared& sh, Bili& bili, ImageStore& avatars, ImageStore& emoteImages,
               const std::string& roomInput, int entryMergeMs, int giftMergeMs, bool verbose,
               std::atomic<bool>& stop, pwvideo::VideoNode* video, std::atomic<int>& received,
-              int count) {
+              int count, WsServer* feed, bool wsRtf) {
   try {
     sh.setState("resolving room");
     const int64_t roomId = bili.resolveRoom(roomInput);
@@ -448,6 +485,10 @@ void siteLoop(Shared& sh, Bili& bili, ImageStore& avatars, ImageStore& emoteImag
       if (verbose)
         std::fprintf(stderr, "[msg] %s%s: %s\n", kindTag(m.kind), m.user.c_str(),
                      m.plainText().c_str());
+      // The feed carries the row that reached the panel, after the mergers: a viewer who tapped a
+      // gift button ten times is one row counting ten in the feed too, not ten rows the panel
+      // never drew. Paid messages are included -- they are rows on screen like any other.
+      if (feed) feed->broadcast(broadcastLine(m, wsRtf));
       sh.append(std::move(m));
       const int n = received.fetch_add(1) + 1;
       if (count > 0 && n >= count) {
@@ -714,6 +755,14 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "--room is required, or --demo for the offline layout\n");
     return 2;
   }
+  if (o.wsRtf && o.wsPort == 0) {
+    std::fprintf(stderr, "--ws-rtf applies to the --ws feed; add --ws, optionally with a port\n");
+    return 2;
+  }
+  if (o.demo && o.wsPort > 0)
+    std::fprintf(stderr,
+                 "warning: --demo draws a fixed frame and publishes nothing, so the --ws feed\n"
+                 "         will accept clients and stay silent\n");
   if (!o.cookie.empty() && !o.cookieFile.empty()) {
     std::fprintf(stderr, "--cookie and --cookie-file are mutually exclusive\n");
     return 2;
@@ -780,6 +829,21 @@ int main(int argc, char** argv) {
   Shared sh;
   sh.roomLabel = o.demo ? std::string("demo") : o.room;
   sh.history = &history;
+
+  // The --ws feed, bound before any thread starts so a port that is already taken is a startup
+  // error rather than a background thread dying quietly behind a picture that looks fine. Loopback
+  // by construction: the flag exists to hand the chat to another program on this machine, and the
+  // feed has no authentication that would protect it if it were reachable from anywhere else.
+  WsServer feed;
+  if (o.wsPort > 0) {
+    try {
+      feed.listen("127.0.0.1", o.wsPort);
+    } catch (const std::exception& e) {
+      std::fprintf(stderr, "cannot serve the --ws feed: %s\n", e.what());
+      return 1;
+    }
+    feed.setVerbose(o.verbose);
+  }
 
   // The panel is built before the image stores because the stores have to be told how large to
   // decode: the avatar box is one line of body text, so it is only known once the font is measured,
@@ -942,16 +1006,26 @@ int main(int argc, char** argv) {
       if (history.enabled())
         std::printf("  History: %s  [window %d rows, %zu restored]\n", history.path().c_str(),
                     o.historyRows, restored);
+      if (o.wsPort > 0)
+        std::printf("  WebSocket: ws://127.0.0.1:%d/  [%s, one text frame per message]\n",
+                    feed.port(), o.wsRtf ? "Resonite RTF" : "avatar URL, name, body");
       std::fflush(stdout);
 
       std::thread avatarThread([&avatars] { avatars.runWorker(); });
       std::thread emoteThread([&emoteImages] { emoteImages.runWorker(); });
 
+      // Before the site thread, so the feed is accepting by the time the first message is
+      // published; the accept loop and the render loop are independent threads and neither waits
+      // on the other.
+      std::thread feedThread;
+      if (o.wsPort > 0) feedThread = std::thread([&feed] { feed.run(); });
+
       std::thread site;
       if (!o.demo) {
         site = std::thread(siteLoop, std::ref(sh), std::ref(bili), std::ref(avatars),
                            std::ref(emoteImages), o.room, o.entryMergeMs, o.giftMergeMs, o.verbose,
-                           std::ref(stop), &video, std::ref(received), o.count);
+                           std::ref(stop), &video, std::ref(received), o.count,
+                           o.wsPort > 0 ? &feed : nullptr, o.wsRtf);
       }
 
       std::thread killer;
@@ -991,12 +1065,20 @@ int main(int argc, char** argv) {
                          static_cast<unsigned long long>(sh.avatarHttp),
                          static_cast<unsigned long long>(sh.avatarProtoRel),
                          static_cast<unsigned long long>(sh.avatarOther));
+            if (o.wsPort > 0)
+              std::fprintf(stderr, "[ws] clients=%zu messages=%llu dropped=%llu\n", feed.clients(),
+                           static_cast<unsigned long long>(feed.messages()),
+                           static_cast<unsigned long long>(feed.dropped()));
           }
         });
       }
       video.run();  // Blocks until SIGINT/SIGTERM, --count, --seconds, or the site loop gives up
       stop.store(true);
       if (site.joinable()) site.join();
+      // After the site thread: nothing else calls broadcast(), and a feed still running would be
+      // one more thread holding a socket open while the process unwinds.
+      feed.stop();
+      if (feedThread.joinable()) feedThread.join();
       avatars.stop();
       emoteImages.stop();
       if (avatarThread.joinable()) avatarThread.join();
@@ -1019,10 +1101,15 @@ int main(int argc, char** argv) {
   // for judging a layout rather than only for reading the connection state.
   std::thread avatarThread([&avatars] { avatars.runWorker(); });
   std::thread emoteThread([&emoteImages] { emoteImages.runWorker(); });
+  std::thread feedThread;
+  if (o.wsPort > 0) feedThread = std::thread([&feed] { feed.run(); });
   std::thread site(siteLoop, std::ref(sh), std::ref(bili), std::ref(avatars), std::ref(emoteImages),
                    o.room, o.entryMergeMs, o.giftMergeMs, o.verbose, std::ref(stop),
                    static_cast<pwvideo::VideoNode*>(nullptr), std::ref(received),
-                   o.count > 0 ? o.count : kDumpMessages);
+                   o.count > 0 ? o.count : kDumpMessages, o.wsPort > 0 ? &feed : nullptr, o.wsRtf);
+  if (o.wsPort > 0)
+    std::printf("WebSocket: ws://127.0.0.1:%d/  [%s]\n", feed.port(),
+                o.wsRtf ? "Resonite RTF" : "avatar URL, name, body");
   const int64_t until = steadyMs() + 90000;
   // Wait for a few messages rather than just the first: one row is not enough to judge a layout,
   // and a panel with real avatars in it needs more than one row to show them.
@@ -1031,6 +1118,9 @@ int main(int argc, char** argv) {
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
   stop.store(true);
   site.join();
+  // After the site thread, the same as the long-running path: nothing else broadcasts.
+  feed.stop();
+  if (feedThread.joinable()) feedThread.join();
   // Same reasoning as the long-running path: the dump collected real rows, so they are worth
   // keeping even though this run was only meant to produce one PNG.
   history.save();

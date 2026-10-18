@@ -36,6 +36,7 @@ It replaces the "OBS browser source plus a large blob of CSS reshaping the chat 
 - **Guard cards** are solid green and scroll with the list
 - **Entry animation**: a new message takes its slot immediately, pushes the old ones up, then slides in
 - **History across restarts**: `--history N` keeps the last N rows on disk and paints them back at the next start, above a rule that separates them from this session's live rows
+- **A local WebSocket feed**: `--ws [PORT]` broadcasts every row as one text frame — `avatarUrl`, `name`, `body`, tab-separated — and `--ws-rtf` styles the name and body with [Resonite rich-text tags](https://wiki.resonite.com/Text_formatting) for a text component that parses them
 - **Fully transparent by default**, with outlines on the text only, so it stays legible over bright content
 - **Any text is rendered literally** — a `<script>` in the chat is glyphs, nothing is parsed as markup
 - Any output size (`WxH`) and an adjustable frame-rate ceiling
@@ -174,6 +175,22 @@ The panel is laid out inside the canvas `--size` gives it: the width sets the wr
 | `--history-label TEXT` | `上次` | Text on the rule between restored and live rows; empty draws the rule alone |
 
 Paid messages are not kept: they are pinned with a dwell clock, and re-pinning yesterday's would be a lie about when it was paid. The behaviour — atomic writes, throttling, per-room files, the writable directory the unit needs — is in [docs/history.md](docs/history.md).
+
+### WebSocket feed
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--ws [PORT]` | off; `8765` when given without a port | Serve every row on a local WebSocket: one text frame per message, three tab-separated fields — `avatarUrl`, `name`, `body`. Bound to `127.0.0.1`, plaintext and with no authentication, so it is a pipe for a consumer on this machine and **must not be exposed past it** |
+| `--ws-rtf` | | Wrap the name and body fields in [Resonite rich-text tags](https://wiki.resonite.com/Text_formatting): the role colour on the name, the gift accent on a gift's verb and name, `<alpha>` dimming on entry and like rows, and `<noparse>` around anything the viewer typed, so chat text cannot inject tags. Requires `--ws` |
+
+The frames carry the rows the panel drew, after `--entry-merge` and `--gift-merge`: ten taps of one gift button are one frame counting ten, not ten frames. Nothing is replayed, so a client that connects mid-stream sees the next message and nothing older. Real captured output at `--ws-rtf`, one frame per line (the avatar field is shown as `<url>` here):
+
+```text
+<url>	<color=#9AA0A6>Loyers</color>	直接下班吧
+	<alpha=#80><color=#9AA0A6>红桃老K_-</color></alpha>	<alpha=#80>等 9 人进入了直播间</alpha>
+```
+
+The avatar field is a URL the panel itself fetched, and is empty on rows that have no avatar box, such as entry notices. The body keeps an emote as the token the sender typed (`[汤圆]`), because a text field cannot show the picture. A tab, newline or other control character in any field becomes a space, so chat text cannot split a field or add one. Any WebSocket client reads it: `websocat ws://127.0.0.1:8765/`, a browser console, or a Resonite WebSocket client.
 
 ### Output and diagnostics
 

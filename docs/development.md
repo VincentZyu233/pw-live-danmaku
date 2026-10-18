@@ -17,6 +17,7 @@
 | 素材获取 | 头像 / 表情 / 礼物图标 URL | 解码后的 cairo 表面（LRU 缓存） | `images` + `avatars` + 子模块的 `AssetCache`，后台线程下载 |
 | 版面渲染 | `Message` 列表 + 表面 | BGRA 帧（预乘 alpha） | `panel` + `notice`，cairo + pango |
 | 跨重启历史 | 行的增删 | 磁盘上的一个 JSON 文件 | `history`，原子写 + 节流，见 [history.md](history.md) |
+| 本机弹幕源 | 面板画出的同一行 | `127.0.0.1` 上的 WebSocket text 帧 | `broadcast`（`--ws` / `--ws-rtf`），见 [internals.md](internals.md) |
 | 视频输出 | BGRA 帧 | `Stream/Output/Video` 节点 | [`pw-video-simple-interface`](https://github.com/zlinux-live-util/pw-video-simple-interface)，libpipewire |
 
 `Message`（`src/message.hpp`）是整条链路的分界线：站点实现把各自的事件翻译成 `Message`，面板只把
@@ -31,6 +32,7 @@ Twitch 的接口位就是为它留的。
 | --- | --- |
 | 主线程 | `pwvideo::VideoNode::run()`（PipeWire 主循环），`process` 回调内只做渲染与拷贝 |
 | 站点线程 | HTTP 引导 + WebSocket 读循环；把消息写进 `Shared`，帧线程只取快照 |
+| 广播线程 | `--ws` 时的本机 WebSocket 服务端：单线程 poll 收发，站点线程只往队列里投递，不等慢客户端 |
 
 与视频节点库那条契约一致：**帧回调内绝不进行网络访问，也不分配**。`Shared::snapshot()` 在锁内做一次值
 拷贝，帧线程拿到的是快照而不是活引用。心跳由**读循环的读超时驱动**（`ws.next(msg, 1000)` 每秒返回一次
@@ -111,7 +113,8 @@ Makefile 里的 `-I` 找到，没有这份数据库 clangd 解析不了 `pwvideo
 | `pw-live-danmaku.service` | systemd 用户服务模板，由 `make install-service` 渲染安装 |
 | `src/message.{hpp,cpp}` | `Message` 与 `Fragment`：与平台无关的消息模型（整条链路的分界线） |
 | `src/bili.{hpp,cpp}` | B 站引导、WBI 签名、JSON 事件解析、入场/礼物合并 |
-| `src/ws.{hpp,cpp}` | 自写的 RFC 6455 TLS WebSocket 客户端（OpenSSL，不引第三方） |
+| `src/ws.{hpp,cpp}` | 自写的 RFC 6455 TLS WebSocket 客户端（OpenSSL，不引第三方）；握手 Accept 的计算导出给服务端复用 |
+| `src/broadcast.{hpp,cpp}` | 本机 WebSocket 弹幕源：三字段线格式、Resonite RTF 标签，以及 loopback 上的 RFC 6455 服务端（明文，单线程 poll） |
 | `src/pb.{hpp,cpp}` | 无 schema 的 protobuf 读取器（`data.pb` 的 base64 blob） |
 | `src/notice.{hpp,cpp}` | 置顶图层：醒目留言与上舰卡片，按金额停留 |
 | `src/panel.{hpp,cpp}` | cairo + pango 聊天面板：静态层 + 增量移位、左侧色条、折行 |
@@ -121,7 +124,7 @@ Makefile 里的 `-I` 找到，没有这份数据库 clangd 解析不了 `pwvideo
 | `src/json.{hpp,cpp}` | 极简只读 JSON 解析器 |
 | `src/demo_faces.{hpp,cpp}` | `--demo` 的合成头像，让离线调版面也能看见头像框的位置 |
 | `src/main.cpp` | 模块组装、命令行解析、PipeWire 节点与渲染回调 |
-| `tests/` | `bili_test`（钉住原始 blob）、`history_test`（往返与窗口）、`json_test` |
+| `tests/` | `bili_test`（钉住原始 blob）、`history_test`（往返与窗口）、`json_test`、`broadcast_test`（线格式与握手/成帧） |
 | `lib/pw-video-simple-interface/` | git 子模块：视频节点（注册、缓冲、帧率协商）与 cairo 辅助模块（帧、文字、素材缓存、HTTP） |
 
 ## 依赖与许可
@@ -159,6 +162,7 @@ make test
 | `tests/bili_test.cpp` | **原始 blob**，不是重新拼的载荷——站方改打包方式会在这里失败，而不是变成一个悄悄空掉的画面；另有 WBI 签名的完整向量、表情切分规则 |
 | `tests/history_test.cpp` | 文件往返、窗口、节流，以及必须被拒绝的文件 |
 | `tests/json_test.cpp` | 只读 JSON 解析器 |
+| `tests/broadcast_test.cpp` | 弹幕线格式（含 RTF 转义）、RFC 6455 的示例握手向量、帧收发、ping/pong，以及两种拒连（未 mask 的帧、非 WebSocket 请求） |
 
 端到端那一步是 `make verify`：挂一个消费者，把帧落盘，用文件大小反推尺寸（BGRA，逐帧
 `width*height*4` 字节）。需要 `gst-launch-1.0` 与 `pipewiresrc`；没有它们就跑不了，此时渲染侧的性能

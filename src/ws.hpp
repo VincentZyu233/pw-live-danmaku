@@ -23,6 +23,12 @@
 
 namespace dwm {
 
+/** The one value both ends of an RFC 6455 handshake compute the same way: base64 of the SHA-1 of
+the client's Sec-WebSocket-Key followed by the protocol GUID. The client checks the server's
+answer with it and the local server writes its own; exporting it is what keeps the two sides from
+each growing a private copy of the same twenty lines. */
+std::string wsAcceptKey(const std::string& secWebSocketKey);
+
 struct WsOptions {
   /** Host name, used for the TLS SNI extension and the certificate check as well as DNS. */
   std::string host;

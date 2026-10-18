@@ -370,10 +370,7 @@ void WsClient::httpUpgrade(const WsOptions& opt) {
 
   // Sec-WebSocket-Accept must be base64(SHA1(key + GUID)); verifying it is what makes this a
   // WebSocket handshake rather than a plain HTTP 200 that happens to say 101.
-  unsigned char digest[SHA_DIGEST_LENGTH];
-  SHA1(reinterpret_cast<const unsigned char*>((key + kWsGuid).data()), key.size() + strlen(kWsGuid),
-       digest);
-  const std::string expect = base64(digest, sizeof(digest));
+  const std::string expect = wsAcceptKey(key);
 
   bool acceptOk = false;
   size_t pos = (eol == std::string::npos) ? head.size() : eol + 2;
@@ -392,6 +389,13 @@ void WsClient::httpUpgrade(const WsOptions& opt) {
     pos = next + 2;
   }
   if (!acceptOk) throw std::runtime_error("Sec-WebSocket-Accept mismatch (not a WebSocket server)");
+}
+
+std::string wsAcceptKey(const std::string& key) {
+  unsigned char digest[SHA_DIGEST_LENGTH];
+  SHA1(reinterpret_cast<const unsigned char*>((key + kWsGuid).data()), key.size() + strlen(kWsGuid),
+       digest);
+  return base64(digest, sizeof(digest));
 }
 
 bool WsClient::sendFrame(uint8_t opcode, const char* data, size_t len) {
