@@ -21,6 +21,25 @@ chmod 600 ~/.config/pw-live-danmaku/cookie
 
 只需要 `SESSDATA` 就能显示昵称；其余字段是 B 站自己的前端也在带的，照抄即可。
 
+## 自动导出（可选）
+
+`tools/get_bili_cookie.py` 会自动打开浏览器、等待你手动扫码登录，然后通过
+Chrome DevTools Protocol 读取 Cookie：
+
+```bash
+uv run tools/get_bili_cookie.py --path /usr/bin/google-chrome
+uv run tools/get_bili_cookie.py --path /usr/bin/microsoft-edge \
+  --output ~/.config/pw-live-danmaku/cookie
+```
+
+脚本默认使用临时浏览器 profile，不碰日常浏览器；登录完成后打印
+`SESSDATA`、`bili_jct`、`DedeUserID` 以及可用的 `buvid3`。给 `--output` 时会把
+同一串 Cookie 写入文件并设为 `0600`。它不处理密码，登录过程始终由你在浏览器里完成。
+
+如果自动检测不到浏览器，用 `--path` 指定 Chrome、Chromium 或 Edge 的可执行文件。
+需要再次使用同一个登录态时可以加 `--profile-dir DIR`，但这会把 Cookie 留在该目录里，
+请自己控制权限。
+
 ## 两种给法
 
 | 参数 | 值的来源 | 会不会进 `ps(1)` |

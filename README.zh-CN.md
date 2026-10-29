@@ -139,6 +139,12 @@ chmod 600 ~/.config/pw-live-danmaku/cookie
 ./pw-live-danmaku --room 545068 --cookie-file ~/.config/pw-live-danmaku/cookie
 ```
 
+也可以用脚本自动完成浏览器登录和 Cookie 导出：
+
+```bash
+uv run tools/get_bili_cookie.py --output ~/.config/pw-live-danmaku/cookie
+```
+
 `--cookie-file` 推荐而不是 `--cookie`：后者会把会话写进进程参数，任何本地用户都能从 `ps(1)` 读到。两种方式下 cookie 都不会被写进日志。
 
 **打码不是全局的**：实测同一条匿名连接上，弹幕与入场的昵称被打码，而**点赞**与站方的入场动画事件给的是实名，所以未登录时画面上仍然会有几个真名。cookie 该取哪些字段、systemd 里的路径怎么写、以及为什么程序自己展开 `~`，见 [docs/cookies.md](docs/cookies.md)；实测数字见 [docs/internals.md](docs/internals.md#两个反直觉的实测结果)。
